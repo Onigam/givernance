@@ -1,10 +1,63 @@
 erDiagram
-  ORG ||--o{ CONTACT : owns
-  ORG ||--o{ HOUSEHOLD : owns
-  ORG ||--o{ DONATION : owns
-  CONTACT ||--o{ DONATION : gives
-  CAMPAIGN ||--o{ DONATION : attributes
-  PROGRAM ||--o{ ENROLLMENT : has
-  CONTACT ||--o{ ENROLLMENT : enrolls
-  GRANT ||--o{ GRANT_DELIVERABLE : has
-  VOLUNTEER ||--o{ VOLUNTEER_SHIFT : performs
+  %% PLATFORM
+  orgs ||--o{ users : "has"
+  orgs ||--o{ audit_log : "owns"
+  orgs ||--o{ domain_events : "emits"
+
+  %% PARTY / CONSTITUENTS
+  orgs ||--o{ constituents : "owns"
+  orgs ||--o{ households : "owns"
+  households ||--o{ household_members : "groups"
+  constituents ||--o{ household_members : "belongs to"
+  constituents ||--o{ constituent_relationships : "has"
+  constituents ||--o{ gdpr_consent_log : "tracks consent"
+
+  %% GIVING
+  orgs ||--o{ funds : "defines"
+  constituents ||--o{ donations : "gives"
+  campaigns ||--o{ donations : "attributes"
+  donations ||--o{ donation_allocations : "splits across"
+  funds ||--o{ donation_allocations : "receives"
+  constituents ||--o{ pledges : "commits"
+  pledges ||--o{ pledge_installments : "schedules"
+  donations ||--o{ soft_credits : "credits"
+
+  %% CAMPAIGNS
+  orgs ||--o{ campaigns : "runs"
+  campaigns ||--o{ campaigns : "parent-child"
+
+  %% GRANTS
+  constituents ||--o{ grants : "funds (as funder org)"
+  grants ||--o{ grant_tranches : "disburses"
+  grants ||--o{ grant_deliverables : "requires"
+  funds ||--o{ grants : "ring-fences"
+
+  %% PROGRAMS
+  orgs ||--o{ programs : "delivers"
+  programs ||--o{ enrollments : "enrolls into"
+  constituents ||--o{ enrollments : "participates"
+  enrollments ||--o{ service_deliveries : "records"
+  enrollments ||--o{ case_notes : "documents"
+
+  %% VOLUNTEERS
+  constituents ||--o{ volunteer_profiles : "extends"
+  orgs ||--o{ volunteer_opportunities : "offers"
+  volunteer_opportunities ||--o{ shifts : "schedules"
+  shifts ||--o{ shift_assignments : "assigns"
+  volunteer_profiles ||--o{ shift_assignments : "fills"
+  volunteer_profiles ||--o{ volunteer_hour_logs : "logs"
+
+  %% IMPACT
+  programs ||--o{ impact_indicators : "measures"
+  impact_indicators ||--o{ impact_readings : "records"
+
+  %% COMMUNICATIONS
+  constituents ||--o{ receipts : "receives"
+  donations ||--o{ receipts : "generates"
+  constituents ||--o{ email_sends : "receives"
+
+  %% FINANCE
+  orgs ||--o{ gl_batches : "closes"
+  gl_batches ||--o{ gl_export_lines : "contains"
+  donations ||--o{ gl_export_lines : "posts to"
+  funds ||--o{ gl_export_lines : "categorises"

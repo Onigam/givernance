@@ -2,7 +2,7 @@
 
 ## Control baseline
 - Data residency: EU-only regions by default
-- Encryption at rest (AES-256) + in transit (TLS 1.2+)
+- Encryption at rest (AES-256) + in transit (TLS 1.3 minimum)
 - Tenant isolation via `org_id` + Postgres RLS
 - RBAC + permission scopes by capability
 - Immutable audit log for privileged actions
@@ -16,7 +16,7 @@
 - Data retention policies per object class
 
 ## Access model
-- Roles: org_admin, fundraiser, program_manager, volunteer_manager, finance_viewer, auditor, support
+- Roles: super_admin, org_admin, fundraising_manager, program_manager, volunteer_coordinator, data_entry, finance_viewer, volunteer, beneficiary, report_only
 - Privileged operations require step-up auth + reason field
 - Break-glass access logged and time-limited
 

@@ -56,7 +56,7 @@ See: /diagrams/container.mmd
 
 #### `givernance-api` (Go 1.23)
 - Single deployable Go binary
-- Domain modules: `constituents`, `donations`, `campaigns`, `grants`, `programs`, `volunteers`, `impact`, `finance`, `comms`, `auth`, `admin`
+- Domain modules: `auth`, `constituents`, `donations`, `campaigns`, `grants`, `programs`, `beneficiaries`, `volunteers`, `impact`, `finance`, `comms`, `reporting`, `gdpr`, `admin`, `platform`
 - Chi router + middleware stack (auth, audit, rate limit, tracing)
 - Connects to PostgreSQL via PgBouncer (transaction mode)
 - Publishes domain events to NATS JetStream outbox consumer
@@ -354,3 +354,68 @@ kamal app exec --reuse -- ./givernance seed --org-template=standard-npo
 | GDPR erasure SLA | 30 days from verified request | Automated tracking |
 | Audit log retention | 7 years | S3 Glacier after 1 year |
 | TLS version | TLS 1.3 minimum | SSL Labs A rating |
+
+---
+
+## 11. AI Layer Architecture
+
+> Detail: [13-ai-modes.md](./13-ai-modes.md) · [vision/conversational-mode.md](./vision/conversational-mode.md)
+
+### 11.1 Three interaction modes
+
+Givernance supports three configurable AI modes per organization. The mode is set globally and can be overridden per module or per role.
+
+| Mode | Behavior | Default |
+|---|---|---|
+| **Mode 1 — Manual** | AI fully disabled; platform works as a traditional CRM | — |
+| **Mode 2 — AI-Assisted** | AI observes and suggests; human validates every action | **Default** |
+| **Mode 3 — Autopilot** | AI executes routine tasks autonomously; human handles exceptions | Requires 30-day Mode 2 history + ≥75% suggestion acceptance rate |
+
+### 11.2 AI service routing
+
+AI processing is handled inside `givernance-api` by an internal `ai` package (not a separate service). It routes requests to different model backends depending on data sensitivity:
+
+```
+givernance-api/
+├── internal/
+│   └── ai/
+│       ├── router.go          # Selects model backend based on data type
+│       ├── confidence.go      # Confidence scoring engine
+│       ├── feedback.go        # Feedback loop (accept/modify/reject signals)
+│       ├── suggestions.go     # Mode 2 suggestion generation
+│       ├── actions.go         # Mode 3 autonomous action execution
+│       └── guard.go           # ai_execution_guard middleware (403 on restricted actions)
+```
+
+### 11.3 Model backends
+
+| Task type | Model | Hosting | Rationale |
+|---|---|---|---|
+| Text suggestions (emails, thank-you letters) | Claude Haiku 3.5 | Anthropic API (EU DPA) | Fast, economical, good writing |
+| Donor trend analysis, scoring, impact narratives | Claude Sonnet 4.5 | Anthropic API (EU DPA) | Stronger reasoning required |
+| Grant classification (long documents) | GPT-4o | Azure OpenAI EU region | Good long-text performance |
+| Beneficiary data (case notes, medical status) | Mistral 7B / Llama 3.1 8B | Self-hosted EU (Ollama) | **No beneficiary PII leaves EU infrastructure** |
+| Duplicate detection (fuzzy name/email) | pg_trgm + local model | PostgreSQL + local | Lightweight, no LLM needed |
+
+### 11.4 Data policy (non-negotiable)
+
+- **Beneficiary PII** (names, case notes, medical/legal status): processed exclusively by the self-hosted EU model. Never sent to any cloud AI service.
+- **Donor PII** (names, emails, amounts): anonymized before cloud dispatch (e.g., "Donateur_A7F2"). The ID↔name mapping stays in the EU database.
+- **Non-PII** (aggregate stats, email templates, generic text): may be processed by cloud AI services with signed EU DPA.
+
+### 11.5 Persistence
+
+| Table | Purpose |
+|---|---|
+| `ai_suggestions` | Mode 2: every suggestion shown to a user (type, model, confidence score, prompt hash, outcome: accepted/modified/rejected) |
+| `ai_actions` | Mode 3: every autonomous action executed (trigger, model, outcome, escalated flag, reversal window) |
+
+Both tables are partitioned by `org_id` (tenant isolation) and retained per the audit log retention policy (7 years).
+
+### 11.6 Guard rails
+
+Actions marked `ai_executable: false` at the API layer are blocked by the `ai_execution_guard` middleware, returning `403 AI_RESTRICTED_ACTION`. This is not configurable by org admins. Restricted actions include: financial operations, data deletion, GDPR erasure, consent modification, role/permission changes, bulk sends >1,000 recipients, beneficiary case closure, and minor data processing.
+
+### 11.7 Confidence scoring
+
+Each suggestion carries a confidence score: `f(model_certainty, training_data_density, field_completeness, user_feedback_history)`. Scores below 0.45 are silently suppressed. The feedback loop (accept/modify/reject signals) is processed in a daily batch job per org to update scoring weights. Organization feedback is isolated — one org's corrections do not affect another's.
