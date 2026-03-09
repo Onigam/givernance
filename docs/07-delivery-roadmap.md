@@ -4,6 +4,9 @@
 - Auth, org model, RBAC, audit trail
 - Core data model skeleton
 - CI/CD + infra baseline
+- **Infra (SaaS)**: Neon.tech EU (PostgreSQL managed), Upstash Redis EU (serverless), Cloudflare R2 (storage)
+- **Infra (self-hosted)**: Docker Compose (Postgres 16, Redis 7, MinIO, Keycloak, Caddy)
+- **Event bus**: Asynq + Redis via transactional outbox — NATS deferred to Phase 4 (see ADR-001)
 
 ## Phase 1 (8 weeks): Fundraising Core
 - Constituents/households/orgs
@@ -24,6 +27,9 @@
 - Salesforce migration toolkit
 - Performance hardening, observability
 - Security review + GDPR controls completion
+- **Introduce NATS JetStream**: domain event fan-out, multi-subscriber consumers, outbound webhook scaling
+- Migrate outbox publisher from Asynq-direct to NATS; Asynq retained for scheduled/periodic tasks
+- NATS stream topology: `constituent.events`, `donation.events`, `program.events`, `comms.events`
 
 ## Acceptance gates
 - < 2 weeks onboarding for pilot org

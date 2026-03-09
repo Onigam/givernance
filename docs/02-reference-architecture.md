@@ -1,6 +1,6 @@
 # 02 — Reference Architecture
 
-> Last updated: 2026-02-24
+> Last updated: 2026-03-09
 
 ---
 
@@ -39,10 +39,10 @@ External systems:
 - **Stripe / Mollie** — payment processing (recurring donations, SEPA)
 - **Keycloak** — identity and access management
 - **Resend / Brevo** — transactional and bulk email
-- **S3-compatible storage** — documents, exports, receipts
-- **NATS JetStream** — internal event bus
+- **Cloudflare R2 / S3-compatible storage** — documents, exports, receipts
 - **Xero / QuickBooks** — accounting integration (write)
 - **Salesforce** — migration source (read-only during migration)
+- **NATS JetStream** — internal event bus *(Phase 4+ only — see ADR-001)*
 
 ---
 
@@ -58,8 +58,8 @@ See: /diagrams/container.mmd
 - Single deployable Go binary
 - Domain modules: `auth`, `constituents`, `donations`, `campaigns`, `grants`, `programs`, `beneficiaries`, `volunteers`, `impact`, `finance`, `comms`, `reporting`, `gdpr`, `admin`, `platform`
 - Chi router + middleware stack (auth, audit, rate limit, tracing)
-- Connects to PostgreSQL via PgBouncer (transaction mode)
-- Publishes domain events to NATS JetStream outbox consumer
+- Connects to PostgreSQL via PgBouncer (transaction mode, or directly to managed Neon.tech in SaaS deployment)
+- Publishes domain events via transactional outbox → Asynq job queue (NATS JetStream in Phase 4+)
 - Serves REST API on `:8080`; admin API on `:8081` (internal only)
 - Health: `GET /healthz`, `GET /readyz`
 
@@ -89,34 +89,50 @@ See: /diagrams/container.mmd
 - WAL archiving to S3 (continuous backup)
 - Logical replication slot for read replica (reporting workload)
 - Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `ltree`, `pg_audit`
+- **Self-hosted deployments**: PostgreSQL 16 + PgBouncer (Docker Compose)
+- **SaaS managed deployment**: [Neon.tech](https://neon.tech) EU region (Frankfurt) — includes connection pooling, branching, WAL backup, full extension support. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
 
 #### `pgbouncer` (PgBouncer 1.22)
-- Transaction-mode pooling
+- Transaction-mode pooling — **self-hosted deployments only**
 - Application connects to PgBouncer on `5432`; PgBouncer connects to PG on `5433`
 - Pool size: max 50 connections to PG; max 500 client connections
 - `SET LOCAL` for tenant context on every transaction
+- *SaaS deployment*: Neon.tech includes built-in connection pooling (pgBouncer-compatible) — no separate container needed.
 
 #### `redis` (Redis 7 / Valkey)
-- Job queue backend (Asynq)
+- Job queue backend (Asynq) — **primary event routing mechanism for Phase 0-3**
 - Rate limiting counters
 - Session cache (short-lived, separate DB index)
 - Feature flags cache
+- **Self-hosted deployments**: Redis 7 / Valkey (Docker Compose)
+- **SaaS managed deployment**: [Upstash Redis](https://upstash.com) EU region — serverless, pay-per-use, GDPR-compliant. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
 
 #### `keycloak` (Keycloak 24)
 - OIDC provider; issues JWTs consumed by `givernance-api`
 - Realms: one per deployment (not per tenant — tenant isolation is in the application layer)
 - Flows: standard, SAML 2.0 bridge, magic link for volunteers
 - Brute-force protection, MFA enforcement by role
+- Retained in all deployment modes — no managed alternative covers the full feature set (SAML 2.0, magic-link, MFA by role). See [ADR-003](./15-infra-adr.md#adr-003-reject-convexdev-and-supabase-as-all-in-one-backend-replacements).
 
-#### `nats` (NATS JetStream 2.10)
-- Event bus for domain events (transactional outbox → NATS publisher)
-- Streams: `constituent.events`, `donation.events`, `program.events`, `comms.events`
-- Retention: `WorkQueuePolicy` (consumed once); dead-letter stream for failures
-- Consumer: `givernance-worker` for email triggers, webhook fanout, audit supplementation
-
-#### `minio` (S3-compatible, self-hosted option)
+#### `storage` (Cloudflare R2 / MinIO)
 - Stores: PDF receipts, bulk export files, imported constituent lists, document attachments
 - Lifecycle policy: exports deleted after 7 days; receipts retained 7 years
+- **Self-hosted deployments**: [MinIO](https://min.io) (S3-compatible, Docker Compose)
+- **SaaS managed deployment**: [Cloudflare R2](https://developers.cloudflare.com/r2/) — S3-compatible API, no egress fees, EU storage. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
+
+#### `nats` ⚠️ Phase 4+ only
+> **NATS JetStream is deferred to Phase 4.** It is not part of the Phase 0-3 infrastructure.
+>
+> In Phase 0-3, domain events are routed via the **transactional outbox → Asynq (Redis)** pipeline, which provides at-least-once delivery, retries, and dead-letter queues natively.
+>
+> NATS JetStream will be introduced in Phase 4 when:
+> - A second autonomous service is extracted from the monolith and needs to consume domain events
+> - Outbound webhook fan-out requires multi-subscriber delivery at scale
+> - Event replay capability is needed for audit enrichment or debugging
+>
+> The outbox pattern intentionally abstracts the publish backend — switching from Asynq-direct to NATS requires changing one file (`pkg/events/publisher.go`), with zero domain logic changes.
+>
+> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) for full decision record.
 
 ---
 
@@ -226,11 +242,13 @@ COMMIT;
 1. API handler writes mutation to DB (e.g., INSERT INTO donations)
 2. In same DB transaction: INSERT INTO domain_events (event_type, payload, published=false)
 3. Transaction commits
-4. Background poller (every 500ms): SELECT unpublished events → publish to NATS → mark published
-5. NATS delivers to subscribers (worker processes)
+4. Background poller (every 500ms): SELECT unpublished events → enqueue Asynq job → mark published
+5. Asynq (Redis) delivers job to givernance-worker (at-least-once, with retries + dead-letter)
 ```
 
-**Why outbox, not direct publish**: Guarantees event delivery even if NATS is temporarily unavailable; no dual-write problem.
+**Why outbox, not direct publish**: Guarantees job delivery even if Redis is temporarily unavailable; no dual-write problem. Asynq provides at-least-once delivery, configurable retries, dead-letter queues, and job inspection — all natively.
+
+**Phase 4 migration path**: When NATS is introduced (see §7.4), the outbox poller will publish to NATS instead of enqueueing Asynq directly. The domain event types and outbox table are unchanged — only `pkg/events/publisher.go` is swapped.
 
 ### 7.2 Domain events (key examples)
 
@@ -245,6 +263,8 @@ COMMIT;
 
 ### 7.3 Scheduled tasks
 
+
+
 Implemented as Asynq periodic tasks (cron expression in config):
 
 | Task | Schedule | Description |
@@ -255,6 +275,29 @@ Implemented as Asynq periodic tasks (cron expression in config):
 | `refresh_materialized_views` | Hourly | Refresh reporting views |
 | `cleanup_expired_exports` | Daily 03:00 UTC | Delete S3 exports older than 7 days |
 | `gdpr_erasure_execution` | Daily 04:00 UTC | Execute queued erasure requests |
+
+### 7.4 NATS JetStream (Phase 4+)
+
+NATS JetStream will be introduced in Phase 4 when the following conditions are met:
+
+- A second autonomous service is extracted from the monolith and needs to consume domain events independently
+- Outbound webhook fan-out requires multi-subscriber delivery at scale (>1,000 webhooks across orgs)
+- Event replay capability is needed for debugging or audit enrichment
+
+**Planned stream topology (Phase 4)**:
+
+| Stream | Events | Consumers |
+|---|---|---|
+| `constituent.events` | created, updated, gdpr_erased | worker, webhook-fanout |
+| `donation.events` | created, receipt_generated, fund_allocated | worker, finance-service, webhook-fanout |
+| `program.events` | enrolled, completed, outcome_recorded | worker, impact-service |
+| `comms.events` | email_sent, bulk_started, suppression_added | worker, audit |
+
+Retention: `WorkQueuePolicy` per consumer group; dead-letter stream for failures after 5 retries.
+
+**Migration from Asynq-direct**: When NATS is introduced, the outbox poller's publish call is redirected from Asynq enqueue to NATS publish. Asynq remains for scheduled/periodic tasks. Zero domain logic changes required.
+
+> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) for the full decision record and revisit criteria.
 
 ---
 
@@ -297,6 +340,8 @@ Implemented as parameterized SQL queries exposed via API (`GET /v1/reports/{repo
 
 ### 9.1 Single-server (SME NPO self-hosted)
 
+All services run locally via Docker Compose. No managed cloud dependencies.
+
 ```yaml
 # docker-compose.yml skeleton
 services:
@@ -307,29 +352,49 @@ services:
   pgbouncer:   pgbouncer/pgbouncer:latest
   redis:       redis:7-alpine
   keycloak:    keycloak/keycloak:24
-  nats:        nats:2.10-alpine
   minio:       minio/minio:latest
   caddy:       caddy:2-alpine      # TLS termination + reverse proxy
 ```
 
 Minimum server: 4 vCPU, 8 GB RAM, 100 GB SSD — handles 5–50 concurrent users.
 
-### 9.2 Managed SaaS (Givernance hosting)
+> **Note**: NATS is not included. Domain events are routed via the transactional outbox → Asynq (Redis). NATS will be added in Phase 4 when multi-service fan-out is required.
+
+### 9.2 Managed SaaS (Givernance hosting — Phase 0-3)
+
+Managed services replace self-hosted infra for zero-ops database, cache and storage.
 
 ```
 CDN (Cloudflare) → Load Balancer → givernance-web (2 replicas)
                                  → givernance-api (3 replicas)
-                                 → PgBouncer → PostgreSQL primary + 1 read replica
-                                 → Redis Cluster
-                                 → Keycloak (2 replicas)
-                                 → NATS Cluster (3 nodes)
-                                 → MinIO (or AWS S3)
+                                 → Neon.tech PostgreSQL EU (managed, built-in pooling + read replica)
+                                 → Upstash Redis EU (serverless)
+                                 → Keycloak (2 replicas, self-hosted on VPS)
+                                 → Cloudflare R2 (documents, receipts, exports)
 ```
 
-### 9.3 Template deployment (Kamal)
+Deployment: Kamal on Hetzner EU VPS (CX31, ~€20/month per deployment). TLS via Caddy.
+
+> **Phase 4 addition**: NATS JetStream cluster (3 nodes) added for domain event fan-out and webhook scaling.
+
+### 9.3 Infrastructure comparison
+
+| Component | Self-hosted NPO | Managed SaaS (Phase 0-3) | Managed SaaS (Phase 4+) |
+|---|---|---|---|
+| PostgreSQL | Self-hosted 16 + PgBouncer | Neon.tech EU (managed) | Neon.tech EU (managed) |
+| Redis / Cache | Self-hosted Redis 7 | Upstash Redis EU (serverless) | Upstash Redis EU |
+| Object Storage | MinIO | Cloudflare R2 | Cloudflare R2 |
+| Event bus | Asynq via outbox (Redis) | Asynq via outbox (Redis) | NATS JetStream + Asynq |
+| Auth | Self-hosted Keycloak 24 | Self-hosted Keycloak 24 | Self-hosted Keycloak 24 |
+| Deployment | Docker Compose + Caddy | Kamal + Hetzner EU VPS | Kamal + Hetzner EU VPS |
+| Services to operate | 8 | 4 (API, Worker, Web, Keycloak) | 5 (+NATS) |
+
+> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) and [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment) for full rationale.
+
+### 9.4 Template deployment (Kamal)
 
 ```bash
-# Deploy a new org instance (single-server SaaS model)
+# Deploy a new org instance (managed SaaS model — Hetzner EU VPS)
 kamal deploy --destination eu-west-1-prod
 kamal app exec --reuse -- ./givernance migrate up
 kamal app exec --reuse -- ./givernance seed --org-template=standard-npo

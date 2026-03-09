@@ -8,10 +8,12 @@ Givernance is a purpose-built CRM for European nonprofits (2-200 staff), designe
 |-------|-----------|
 | API | Go 1.23, modular monolith |
 | Web | Next.js 15 (React, TypeScript) |
-| Database | PostgreSQL 16 |
-| Messaging | NATS |
-| Auth | Keycloak (OIDC) |
-| Infra | Docker, Kubernetes |
+| Database | PostgreSQL 16 (SaaS: Neon.tech EU · Self-hosted: Postgres 16 + PgBouncer) |
+| Job Queue / Events | Asynq + Redis (Phase 0-3) — NATS JetStream added Phase 4+ |
+| Cache / Rate-limit | Redis (SaaS: Upstash EU · Self-hosted: Redis 7) |
+| Storage | Cloudflare R2 (SaaS) · MinIO (Self-hosted) |
+| Auth | Keycloak 24 (OIDC / SAML — all deployments) |
+| Deployment | Docker Compose (self-hosted) · Kamal + Hetzner EU (SaaS) |
 
 ## Directory Structure
 
@@ -33,6 +35,7 @@ Givernance is a purpose-built CRM for European nonprofits (2-200 staff), designe
 │   ├── 12-user-journeys.md        — 5 persona journeys with Mermaid flows
 │   ├── 13-ai-modes.md            — Manual / Assisted / Autopilot AI modes
 │   ├── 14-screen-inventory.md     — Complete 86-screen inventory
+│   ├── 15-infra-adr.md           — Architecture Decision Records (ADR-001, ADR-002, ADR-003)
 │   ├── vision/
 │   │   └── conversational-mode.md — Future conversational AI mode (2026-2028)
 │   └── design/                    — 86 interactive HTML mockups
