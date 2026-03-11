@@ -92,7 +92,7 @@ See: /diagrams/container.mmd
 - Logical replication slot for read replica (reporting workload)
 - Extensions: `uuid-ossp`, `pgcrypto`, `pg_trgm`, `ltree`, `pg_audit`
 - **Self-hosted deployments**: PostgreSQL 16 + PgBouncer (Docker Compose)
-- **SaaS managed deployment**: [Neon.tech](https://neon.tech) EU region (Frankfurt) — includes connection pooling, branching, WAL backup, full extension support. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
+- **SaaS managed deployment**: [Neon.tech](https://neon.tech) EU region (Frankfurt) — includes connection pooling, branching, WAL backup, full extension support. See [ADR-006](./15-infra-adr.md#adr-006-managed-infrastructure-for-saas-deployment).
 
 #### `pgbouncer` (PgBouncer 1.22)
 - Transaction-mode pooling — **self-hosted deployments only**
@@ -107,20 +107,20 @@ See: /diagrams/container.mmd
 - Session cache (short-lived, separate DB index)
 - Feature flags cache
 - **Self-hosted deployments**: Redis 7 / Valkey (Docker Compose)
-- **SaaS managed deployment**: [Upstash Redis](https://upstash.com) EU region — serverless, pay-per-use, GDPR-compliant. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
+- **SaaS managed deployment**: [Upstash Redis](https://upstash.com) EU region — serverless, pay-per-use, GDPR-compliant. See [ADR-006](./15-infra-adr.md#adr-006-managed-infrastructure-for-saas-deployment).
 
 #### `keycloak` (Keycloak 24)
 - OIDC provider; issues JWTs consumed by `givernance-api`
 - Realms: one per deployment (not per tenant — tenant isolation is in the application layer)
 - Flows: standard, SAML 2.0 bridge, magic link for volunteers
 - Brute-force protection, MFA enforcement by role
-- Retained in all deployment modes — no managed alternative covers the full feature set (SAML 2.0, magic-link, MFA by role). See [ADR-003](./15-infra-adr.md#adr-003-reject-convexdev-and-supabase-as-all-in-one-backend-replacements).
+- Retained in all deployment modes — no managed alternative covers the full feature set (SAML 2.0, magic-link, MFA by role). See [ADR-007](./15-infra-adr.md#adr-007-reject-convexdev-and-supabase-as-all-in-one-backend-replacements).
 
 #### `storage` (Cloudflare R2 / MinIO)
 - Stores: PDF receipts, bulk export files, imported constituent lists, document attachments
 - Lifecycle policy: exports deleted after 7 days; receipts retained 7 years
 - **Self-hosted deployments**: [MinIO](https://min.io) (S3-compatible, Docker Compose)
-- **SaaS managed deployment**: [Cloudflare R2](https://developers.cloudflare.com/r2/) — S3-compatible API, no egress fees, EU storage. See [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment).
+- **SaaS managed deployment**: [Cloudflare R2](https://developers.cloudflare.com/r2/) — S3-compatible API, no egress fees, EU storage. See [ADR-006](./15-infra-adr.md#adr-006-managed-infrastructure-for-saas-deployment).
 
 #### `nats` ⚠️ Phase 4+ only
 > **NATS JetStream is deferred to Phase 4.** It is not part of the Phase 0-3 infrastructure.
@@ -134,7 +134,7 @@ See: /diagrams/container.mmd
 >
 > The outbox pattern intentionally abstracts the publish backend — switching from BullMQ-direct to NATS requires changing one module (`packages/shared/src/events/publisher.ts`), with zero domain logic changes.
 >
-> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) for full decision record.
+> See [ADR-005](./15-infra-adr.md#adr-005-nats-jetstream--deferred-to-phase-4) for full decision record.
 
 ---
 
@@ -313,7 +313,7 @@ Retention: `WorkQueuePolicy` per consumer group; dead-letter stream for failures
 
 **Migration from Asynq-direct**: When NATS is introduced, the outbox poller's publish call is redirected from Asynq enqueue to NATS publish. Asynq remains for scheduled/periodic tasks. Zero domain logic changes required.
 
-> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) for the full decision record and revisit criteria.
+> See [ADR-005](./15-infra-adr.md#adr-005-nats-jetstream--deferred-to-phase-4) for the full decision record and revisit criteria.
 
 ---
 
@@ -405,7 +405,7 @@ Deployment: Kamal on Hetzner EU VPS (CX31, ~€20/month per deployment). TLS via
 | Deployment | Docker Compose + Caddy | Kamal + Hetzner EU VPS | Kamal + Hetzner EU VPS |
 | Services to operate | 8 | 4 (API, Worker, Web, Keycloak) | 5 (+NATS) |
 
-> See [ADR-001](./15-infra-adr.md#adr-001-defer-nats-jetstream-to-phase-4) and [ADR-002](./15-infra-adr.md#adr-002-managed-infrastructure-for-saas-deployment) for full rationale.
+> See [ADR-005](./15-infra-adr.md#adr-005-nats-jetstream--deferred-to-phase-4) and [ADR-006](./15-infra-adr.md#adr-006-managed-infrastructure-for-saas-deployment) for full rationale.
 
 ### 9.4 Template deployment (Kamal)
 
