@@ -16,16 +16,19 @@ flowchart TB
   end
 
   subgraph Infrastructure
-    PgBouncer["PgBouncer 1.22\n(connection pooling)"]
-    PG["PostgreSQL 16\n(primary datastore + RLS)"]
+    PG["PostgreSQL 16\n(SaaS: Neon.tech EU · Self-hosted: Postgres 16)"]
+    PgBouncer["PgBouncer 1.22\n(self-hosted only — Neon includes pooling)"]
     PGReplica["PostgreSQL 16\n(read replica — reporting)"]
-    Redis["Redis 7 / Valkey\n(job queue, cache, rate limit)"]
-    NATS["NATS JetStream 2.10\n(event bus)"]
-    MinIO["MinIO / S3\n(documents, receipts, exports)"]
+    Redis["Redis / Upstash\n(job queue + cache + rate limit\nSaaS: Upstash EU · Self-hosted: Redis 7)"]
+    Storage["Cloudflare R2 / MinIO\n(SaaS: R2 · Self-hosted: MinIO)"]
   end
 
   subgraph Identity
-    Keycloak["Keycloak 24\n(OIDC / SAML)"]
+    Keycloak["Keycloak 24\n(OIDC / SAML — all deployments)"]
+  end
+
+  subgraph Phase4["Phase 4+ (not deployed in Phase 0-3)"]
+    NATS["NATS JetStream 2.10\n(domain event fan-out\nmulti-service · webhook scaling)"]
   end
 
   subgraph External
@@ -45,18 +48,23 @@ flowchart TB
   API --> PgBouncer
   PgBouncer --> PG
   PG -.->|WAL replication| PGReplica
-  API --> Redis
-  API -->|publish events| NATS
-  API -->|presigned URLs| MinIO
+  API -->|outbox enqueue| Redis
+  API -->|presigned URLs| Storage
   API -->|JWT validation| Keycloak
   API --> Stripe
   API --> Accounting
 
+  Worker -->|consume jobs| Redis
   Worker --> PgBouncer
-  Worker --> Redis
-  Worker -->|consume events| NATS
-  Worker --> MinIO
+  Worker --> Storage
   Worker --> Email
 
   Migrate -->|direct DB load| PG
-  Migrate -->|read SF exports| MinIO
+  Migrate -->|read SF exports| Storage
+
+  API -.->|Phase 4+| NATS
+  NATS -.->|Phase 4+| Worker
+
+  classDef phased fill:#f5f5f5,stroke:#aaa,stroke-dasharray:5 5,color:#888
+  class NATS phased
+  class Phase4 phased
