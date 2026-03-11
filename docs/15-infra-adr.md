@@ -1,8 +1,6 @@
 # 15 — Architecture Decision Records
 
-> Last updated: 2026-03-11
-
-This document captures key architectural decisions for Givernance, recording context, rationale, trade-offs considered, and the conditions under which each decision should be revisited.
+This document captures key architectural decisions for Givernance, recording context, rationale, and tradeoffs for future reference.
 
 ---
 
@@ -210,7 +208,7 @@ DB transaction (mutation + domain_events row)
 
 BullMQ provides natively: at-least-once delivery, configurable retry with backoff, dead-letter queues, job deduplication, cron scheduling, and BullBoard web UI for job inspection. No separate message broker needed.
 
-The transactional outbox pattern intentionally abstracts the publish backend. Switching from BullMQ-direct to NATS in Phase 4 requires changing one publisher module — zero domain logic changes.
+The transactional outbox pattern intentionally abstracts the publish backend. Switching from BullMQ-direct to NATS in Phase 4 requires changing **one file** (`packages/shared/src/events/publisher.ts`) — zero domain logic changes.
 
 ### Reintroduction Criteria (Phase 4+)
 
@@ -232,7 +230,7 @@ The transactional outbox pattern intentionally abstracts the publish backend. Sw
 
 ---
 
-## ADR-006: Managed Infrastructure for SaaS Deployment
+## ADR-006: Managed SaaS Infrastructure — Neon.tech + Upstash + Cloudflare R2
 
 **Status:** Accepted
 **Date:** 2026-03-09
@@ -297,9 +295,8 @@ For **self-hosted NPO deployments** (Docker Compose), retain self-managed Postgr
 
 ## ADR-007: Reject Convex.dev and Supabase as All-in-One Backend Replacements
 
-**Status:** Rejected
+**Status:** Accepted
 **Date:** 2026-03-09
-**Updated:** 2026-03-11
 
 ### Context
 
@@ -339,7 +336,7 @@ Self-hosted Convex now exists (Docker + PostgreSQL backend, released Feb 2025). 
 - ✅ Keycloak retained — full auth feature set preserved (SAML 2.0, MFA, magic-link, brute-force protection)
 - ✅ PostgreSQL with RLS, pg_audit, pg_trgm retained — GDPR tenant isolation and audit patterns preserved
 - ✅ Self-hosted deployment path preserved — no cloud-only dependency
-- ✅ TypeScript + Fastify backend retained — full-stack type sharing, performance sufficient for target workload
+- ✅ TypeScript full-stack retained — shared types and monorepo benefits preserved (see ADR-002)
 - ⚠️ Auth infrastructure requires self-hosting Keycloak — adds one container to manage in all deployment modes
 
 ---

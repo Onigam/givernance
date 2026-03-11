@@ -260,13 +260,13 @@ COMMIT;
 1. API handler writes mutation to DB (e.g., INSERT INTO donations)
 2. In same DB transaction: INSERT INTO domain_events (event_type, payload, published=false)
 3. Transaction commits
-4. Background poller (every 500ms): SELECT unpublished events → enqueue Asynq job → mark published
-5. Asynq (Redis) delivers job to givernance-worker (at-least-once, with retries + dead-letter)
+4. Background poller (every 500ms): SELECT unpublished events → enqueue BullMQ job → mark published
+5. BullMQ (Redis) delivers job to givernance-worker (at-least-once, with retries + dead-letter)
 ```
 
-**Why outbox, not direct publish**: Guarantees job delivery even if Redis is temporarily unavailable; no dual-write problem. Asynq provides at-least-once delivery, configurable retries, dead-letter queues, and job inspection — all natively.
+**Why outbox, not direct publish**: Guarantees job delivery even if Redis is temporarily unavailable; no dual-write problem. BullMQ provides at-least-once delivery, configurable retries, dead-letter queues, and job inspection — all natively.
 
-**Phase 4 migration path**: When NATS is introduced (see §7.4), the outbox poller will publish to NATS instead of enqueueing Asynq directly. The domain event types and outbox table are unchanged — only `pkg/events/publisher.go` is swapped.
+**Phase 4 migration path**: When NATS is introduced (see §7.4), the outbox poller will publish to NATS instead of enqueueing BullMQ directly. The domain event types and outbox table are unchanged — only `packages/shared/src/events/publisher.ts` is swapped.
 
 ### 7.2 Domain events (key examples)
 
@@ -311,7 +311,7 @@ NATS JetStream will be introduced in Phase 4 when the following conditions are m
 
 Retention: `WorkQueuePolicy` per consumer group; dead-letter stream for failures after 5 retries.
 
-**Migration from Asynq-direct**: When NATS is introduced, the outbox poller's publish call is redirected from Asynq enqueue to NATS publish. Asynq remains for scheduled/periodic tasks. Zero domain logic changes required.
+**Migration from BullMQ-direct**: When NATS is introduced, the outbox poller's publish call is redirected from BullMQ enqueue to NATS publish. BullMQ remains for scheduled/periodic tasks. Zero domain logic changes required.
 
 > See [ADR-005](./15-infra-adr.md#adr-005-nats-jetstream--deferred-to-phase-4) for the full decision record and revisit criteria.
 
@@ -374,7 +374,7 @@ services:
 
 Minimum server: 4 vCPU, 8 GB RAM, 100 GB SSD — handles 5–50 concurrent users.
 
-> **Note**: NATS is not included. Domain events are routed via the transactional outbox → Asynq (Redis). NATS will be added in Phase 4 when multi-service fan-out is required.
+> **Note**: NATS is not included. Domain events are routed via the transactional outbox → BullMQ (Redis). NATS will be added in Phase 4 when multi-service fan-out is required.
 
 ### 9.2 Managed SaaS (Givernance hosting — Phase 0-3)
 
@@ -400,7 +400,7 @@ Deployment: Kamal on Hetzner EU VPS (CX31, ~€20/month per deployment). TLS via
 | PostgreSQL | Self-hosted 16 + PgBouncer | Neon.tech EU (managed) | Neon.tech EU (managed) |
 | Redis / Cache | Self-hosted Redis 7 | Upstash Redis EU (serverless) | Upstash Redis EU |
 | Object Storage | MinIO | Cloudflare R2 | Cloudflare R2 |
-| Event bus | Asynq via outbox (Redis) | Asynq via outbox (Redis) | NATS JetStream + Asynq |
+| Event bus | BullMQ via outbox (Redis) | BullMQ via outbox (Redis) | NATS JetStream + BullMQ |
 | Auth | Self-hosted Keycloak 24 | Self-hosted Keycloak 24 | Self-hosted Keycloak 24 |
 | Deployment | Docker Compose + Caddy | Kamal + Hetzner EU VPS | Kamal + Hetzner EU VPS |
 | Services to operate | 8 | 4 (API, Worker, Web, Keycloak) | 5 (+NATS) |
