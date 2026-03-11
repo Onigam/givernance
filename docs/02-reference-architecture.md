@@ -54,12 +54,13 @@ See: /diagrams/container.mmd
 
 ### 3.1 Core containers
 
-#### `givernance-api` (Go 1.23)
-- Single deployable Go binary
+#### `givernance-api` (TypeScript, Fastify 5)
+- TypeScript ESM application running on Node.js 22 LTS
 - Domain modules: `auth`, `constituents`, `donations`, `campaigns`, `grants`, `programs`, `beneficiaries`, `volunteers`, `impact`, `finance`, `comms`, `reporting`, `gdpr`, `admin`, `platform`
-- Chi router + middleware stack (auth, audit, rate limit, tracing)
-- Connects to PostgreSQL via PgBouncer (transaction mode, or directly to managed Neon.tech in SaaS deployment)
-- Publishes domain events via transactional outbox → Asynq job queue (NATS JetStream in Phase 4+)
+- Fastify 5 router + plugin stack (auth, audit, rate limit, tracing); TypeBox for OpenAPI schema validation + type-safe routes
+- Drizzle ORM for type-safe PostgreSQL queries; connects via PgBouncer (transaction mode, or directly to managed Neon.tech in SaaS deployment)
+- Zod for runtime input validation with inferred TypeScript types
+- Publishes domain events via transactional outbox → BullMQ job queue (NATS JetStream deferred to Phase 4+)
 - Serves REST API on `:8080`; admin API on `:8081` (internal only)
 - Health: `GET /healthz`, `GET /readyz`
 
@@ -70,14 +71,15 @@ See: /diagrams/container.mmd
 - Auth: OIDC flow through Keycloak; JWT stored in httpOnly cookie
 - Static assets served from CDN (CloudFront / Cloudflare)
 
-#### `givernance-worker` (Go 1.23)
-- Async job processor (Asynq queue on Redis)
+#### `givernance-worker` (TypeScript, BullMQ 5)
+- Async job processor (BullMQ queues on Redis)
 - Jobs: PDF generation, bulk email send, import processing, scheduled reports, GL export, GDPR erasure execution, recurring donation installment creation
-- Shares codebase with `givernance-api` (same Go module); separate binary entry point
+- Shares types and schemas with `givernance-api` via `@givernance/shared` package; separate process entry point
 
-#### `givernance-migrate` (Go 1.23 or Python 3.12)
+#### `givernance-migrate` (TypeScript, Drizzle Kit)
 - One-off migration tool for Salesforce data
-- Reads from S3 (exported SF data), transforms, loads via direct DB connection
+- Reads from S3 (exported SF data), transforms, bulk-loads via Drizzle ORM
+- DB schema migrations managed by Drizzle Kit (generate, push, migrate)
 - Not running in production; invoked during migration engagements
 - See [05-integration-migration.md](./05-integration-migration.md)
 
@@ -100,7 +102,7 @@ See: /diagrams/container.mmd
 - *SaaS deployment*: Neon.tech includes built-in connection pooling (pgBouncer-compatible) — no separate container needed.
 
 #### `redis` (Redis 7 / Valkey)
-- Job queue backend (Asynq) — **primary event routing mechanism for Phase 0-3**
+- Job queue backend (BullMQ) — **primary event routing mechanism for Phase 0-3**
 - Rate limiting counters
 - Session cache (short-lived, separate DB index)
 - Feature flags cache
@@ -136,37 +138,53 @@ See: /diagrams/container.mmd
 
 ---
 
-## 4. Module map (within `givernance-api`)
+## 4. Module map (pnpm monorepo)
 
 ```
-givernance-api/
-├── cmd/
-│   ├── api/          # HTTP server entry point
-│   └── worker/       # Job worker entry point
-├── internal/
-│   ├── auth/         # JWT validation, Keycloak integration, RBAC middleware
-│   ├── constituents/ # Persons, households, organizations, relationships
-│   ├── donations/    # Gifts, pledges, installments, funds, allocations
-│   ├── campaigns/    # Campaign management, source tracking
-│   ├── grants/       # Grant pipeline, funder relations, deliverables
-│   ├── programs/     # Program catalog, enrollments, service delivery
-│   ├── beneficiaries/# Beneficiary records, case notes, outcomes
-│   ├── volunteers/   # Volunteer profiles, shifts, hours
-│   ├── impact/       # Indicators, readings, ToC, dashboards
-│   ├── finance/      # Fund accounting, GL export, batch closing
-│   ├── comms/        # Email templates, bulk sends, receipts
-│   ├── reporting/    # Standard reports, custom queries, exports
-│   ├── gdpr/         # SAR, erasure, consent management
-│   ├── admin/        # Org settings, users, custom fields, billing
-│   └── platform/     # Super-admin: org provisioning, feature flags
-├── pkg/
-│   ├── db/           # DB connection, RLS context setter, transaction helpers
-│   ├── events/       # Domain event types, outbox publisher
-│   ├── jobs/         # Job types, Asynq client
-│   ├── audit/        # Audit middleware, audit log writer
-│   ├── pagination/   # Cursor-based pagination
-│   └── validator/    # Input validation helpers
-└── migrations/       # SQL migration files (golang-migrate compatible)
+packages/
+├── shared/                  # @givernance/shared — shared types, schemas, utils
+│   ├── src/
+│   │   ├── schema/          # Drizzle ORM schema definitions (all tables)
+│   │   ├── types/           # Shared TypeScript types
+│   │   ├── events/          # Domain event types (CloudEvents)
+│   │   ├── jobs/            # BullMQ job type definitions
+│   │   └── validators/      # Zod schemas for API input validation
+│   └── package.json
+├── api/                     # @givernance/api — Fastify API server
+│   ├── src/
+│   │   ├── server.ts        # Fastify app factory
+│   │   ├── plugins/         # Auth, audit, rate-limit, CORS, OpenAPI
+│   │   ├── modules/         # Domain modules
+│   │   │   ├── auth/        # JWT validation, Keycloak integration, RBAC middleware
+│   │   │   ├── constituents/# Persons, households, organizations, relationships
+│   │   │   ├── donations/   # Gifts, pledges, installments, funds, allocations
+│   │   │   ├── campaigns/   # Campaign management, source tracking
+│   │   │   ├── grants/      # Grant pipeline, funder relations, deliverables
+│   │   │   ├── programs/    # Program catalog, enrollments, service delivery
+│   │   │   ├── beneficiaries/ # Beneficiary records, case notes, outcomes
+│   │   │   ├── volunteers/  # Volunteer profiles, shifts, hours
+│   │   │   ├── impact/      # Indicators, readings, ToC, dashboards
+│   │   │   ├── finance/     # Fund accounting, GL export, batch closing
+│   │   │   ├── comms/       # Email templates, bulk sends, receipts
+│   │   │   ├── reporting/   # Standard reports, custom queries, exports
+│   │   │   ├── gdpr/        # SAR, erasure, consent management
+│   │   │   ├── admin/       # Org settings, users, custom fields, billing
+│   │   │   └── platform/    # Super-admin: org provisioning, feature flags
+│   │   └── lib/             # DB client (Drizzle), Redis client, NATS client, RLS helper
+│   └── package.json
+├── worker/                  # @givernance/worker — BullMQ job processor
+│   ├── src/
+│   │   ├── worker.ts        # BullMQ worker entry point
+│   │   ├── queues/          # Queue definitions
+│   │   └── processors/      # Job processor handlers (one per job type)
+│   └── package.json
+└── migrate/                 # @givernance/migrate — one-off Salesforce ETL tool
+    ├── src/
+    │   ├── index.ts         # CLI entry point
+    │   ├── extractors/      # Read from SF export (S3/CSV)
+    │   ├── transformers/    # Map SF schema to Givernance schema
+    │   └── loaders/         # Bulk insert via Drizzle
+    └── package.json
 ```
 
 ---
@@ -198,7 +216,7 @@ givernance-api/
 - Async: `POST /v1/exports` → returns `{export_id}`
 - Poll: `GET /v1/exports/{id}` → `{status: "pending|processing|ready|failed", download_url}`
 - Download URL: presigned S3 URL, valid 1 hour
-- Formats: CSV, JSON, XLSX (XLSX via Go library, not spreadsheet service)
+- Formats: CSV, JSON, XLSX (XLSX via ExcelJS, not spreadsheet service)
 
 ### 5.4 Import API
 
@@ -263,9 +281,7 @@ COMMIT;
 
 ### 7.3 Scheduled tasks
 
-
-
-Implemented as Asynq periodic tasks (cron expression in config):
+Implemented as BullMQ repeat jobs (cron expression in config):
 
 | Task | Schedule | Description |
 |---|---|---|
@@ -331,7 +347,7 @@ Implemented as parameterized SQL queries exposed via API (`GET /v1/reports/{repo
 
 - **CSV**: All list views; simple tabular export
 - **XLSX**: Formatted reports with headers and totals
-- **PDF**: Receipts, impact summaries, funder reports (generated via `chromedp` or `wkhtmltopdf`)
+- **PDF**: Receipts, impact summaries, funder reports (generated via Puppeteer or `wkhtmltopdf`)
 - **JSON**: API-native; used for accounting integration payloads
 
 ---
@@ -396,8 +412,8 @@ Deployment: Kamal on Hetzner EU VPS (CX31, ~€20/month per deployment). TLS via
 ```bash
 # Deploy a new org instance (managed SaaS model — Hetzner EU VPS)
 kamal deploy --destination eu-west-1-prod
-kamal app exec --reuse -- ./givernance migrate up
-kamal app exec --reuse -- ./givernance seed --org-template=standard-npo
+kamal app exec --reuse -- pnpm --filter @givernance/migrate drizzle-kit migrate
+kamal app exec --reuse -- pnpm --filter @givernance/migrate seed --org-template=standard-npo
 ```
 
 ---
@@ -438,18 +454,16 @@ Givernance supports three configurable AI modes per organization. The mode is se
 
 ### 11.2 AI service routing
 
-AI processing is handled inside `givernance-api` by an internal `ai` package (not a separate service). It routes requests to different model backends depending on data sensitivity:
+AI processing is handled inside `givernance-api` by an internal `ai` module (not a separate service). It routes requests to different model backends depending on data sensitivity:
 
 ```
-givernance-api/
-├── internal/
-│   └── ai/
-│       ├── router.go          # Selects model backend based on data type
-│       ├── confidence.go      # Confidence scoring engine
-│       ├── feedback.go        # Feedback loop (accept/modify/reject signals)
-│       ├── suggestions.go     # Mode 2 suggestion generation
-│       ├── actions.go         # Mode 3 autonomous action execution
-│       └── guard.go           # ai_execution_guard middleware (403 on restricted actions)
+packages/api/src/modules/ai/
+├── router.ts          # Selects model backend based on data type
+├── confidence.ts      # Confidence scoring engine
+├── feedback.ts        # Feedback loop (accept/modify/reject signals)
+├── suggestions.ts     # Mode 2 suggestion generation
+├── actions.ts         # Mode 3 autonomous action execution
+└── guard.ts           # ai_execution_guard plugin (403 on restricted actions)
 ```
 
 ### 11.3 Model backends
